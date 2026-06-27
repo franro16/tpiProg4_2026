@@ -20,6 +20,7 @@ import com.tpiProg.subastas.repository.BidRepository;
 import com.tpiProg.subastas.repository.ProductRepository;
 import com.tpiProg.subastas.repository.UserRepository;
 import com.tpiProg.subastas.service.AuctionService;
+import com.tpiProg.subastas.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -39,6 +40,7 @@ public class AuctionServiceImpl implements AuctionService {
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
     private final BidRepository bidRepository;
+    private final NotificationService notificationService; // NUEVA INYECCIÓN
 
     // -------------------------------------------------------
     // CREAR subasta en estado BORRADOR
@@ -47,7 +49,6 @@ public class AuctionServiceImpl implements AuctionService {
     @Transactional
     public AuctionResponse create(AuctionRequest request, Long sellerId) {
 
-        // Validar que la fecha de cierre sea posterior a la de inicio
         if (!request.endDate().isAfter(request.startDate())) {
             throw new BusinessException("La fecha de cierre debe ser posterior a la fecha de inicio");
         }
@@ -56,7 +57,6 @@ public class AuctionServiceImpl implements AuctionService {
         Product product = productRepository.findById(request.productId())
                 .orElseThrow(() -> new ResourceNotFoundException("Producto", request.productId()));
 
-        // Solo el dueño del producto puede crear la subasta
         if (!product.getSeller().getId().equals(sellerId)) {
             throw new UnauthorizedException("No sos el propietario de este producto");
         }
@@ -71,12 +71,12 @@ public class AuctionServiceImpl implements AuctionService {
                 .status(AuctionStatus.BORRADOR)
                 .description(request.description())
                 .build();
-
+        
         auctionRepository.save(auction);
 
         registrarHistorial(auction, null, AuctionStatus.BORRADOR, seller,
                 "Subasta creada en borrador");
-
+                
         log.debug("Subasta creada con id={} por seller={}", auction.getId(), sellerId);
         return toResponse(auction);
     }
@@ -90,7 +90,6 @@ public class AuctionServiceImpl implements AuctionService {
         Auction auction = findOrThrow(auctionId);
         User seller = findUserOrThrow(sellerId);
 
-        // Solo el vendedor dueño puede publicar
         if (!auction.getProduct().getSeller().getId().equals(sellerId)) {
             throw new UnauthorizedException("No sos el propietario de esta subasta");
         }
@@ -104,10 +103,10 @@ public class AuctionServiceImpl implements AuctionService {
         AuctionStatus estadoAnterior = auction.getStatus();
         auction.cambiarEstado(AuctionStatus.PUBLICADA);
         auctionRepository.save(auction);
-
+        
         registrarHistorial(auction, estadoAnterior, AuctionStatus.PUBLICADA, seller,
                 "Subasta publicada por el vendedor");
-
+                
         log.debug("Subasta id={} publicada por seller={}", auctionId, sellerId);
         return toResponse(auction);
     }
@@ -119,10 +118,7 @@ public class AuctionServiceImpl implements AuctionService {
     @Transactional(readOnly = true)
     public AuctionDetailResponse getById(Long auctionId, Long requestingUserId) {
         Auction auction = findOrThrow(auctionId);
-
-        // Determinar ganador visible segun estado y rol
         String winnerUsername = resolveWinnerVisibility(auction, requestingUserId);
-
         return toDetailResponse(auction, winnerUsername);
     }
 
@@ -139,8 +135,6 @@ public class AuctionServiceImpl implements AuctionService {
 
     // -------------------------------------------------------
     // CANCELAR subasta
-    // Regla: vendedor puede cancelar solo si no tiene pujas
-    //        ADMIN puede cancelar aunque tenga pujas
     // -------------------------------------------------------
     @Override
     @Transactional
@@ -148,7 +142,6 @@ public class AuctionServiceImpl implements AuctionService {
         Auction auction = findOrThrow(auctionId);
         User responsable = findUserOrThrow(userId);
 
-        // Estados desde los que se puede cancelar
         if (auction.getStatus() == AuctionStatus.FINALIZADA
                 || auction.getStatus() == AuctionStatus.ADJUDICADA
                 || auction.getStatus() == AuctionStatus.CANCELADA) {
@@ -157,9 +150,8 @@ public class AuctionServiceImpl implements AuctionService {
         }
 
         boolean tienePujas = bidRepository.existsByAuctionId(auctionId);
-
+        
         if (!isAdmin) {
-            // Verificar que sea el vendedor
             if (!auction.getProduct().getSeller().getId().equals(userId)) {
                 throw new UnauthorizedException("No sos el propietario de esta subasta");
             }
@@ -175,6 +167,15 @@ public class AuctionServiceImpl implements AuctionService {
 
         registrarHistorial(auction, estadoAnterior, AuctionStatus.CANCELADA, responsable,
                 request.reason());
+                
+        // Notificar cancelación si corresponde
+        notificationService.createNotification(auction.getProduct().getSeller(), 
+                "La subasta del producto '" + auction.getProduct().getName() + "' ha sido CANCELADA. Motivo: " + request.reason());
+        
+        if (auction.getWinner() != null) {
+             notificationService.createNotification(auction.getWinner(), 
+                "La subasta del producto '" + auction.getProduct().getName() + "' en la que ibas ganando ha sido CANCELADA. Motivo: " + request.reason());
+        }
 
         log.debug("Subasta id={} cancelada por userId={} (isAdmin={})", auctionId, userId, isAdmin);
     }
@@ -195,9 +196,6 @@ public class AuctionServiceImpl implements AuctionService {
 
     // -------------------------------------------------------
     // TRANSICIONES AUTOMATICAS - llamado por el Scheduler
-    // PUBLICADA -> ACTIVA si llego la fecha de inicio
-    // ACTIVA -> FINALIZADA si no hay pujas
-    // ACTIVA -> ADJUDICADA si hay pujas
     // -------------------------------------------------------
     @Override
     @Transactional
@@ -209,7 +207,6 @@ public class AuctionServiceImpl implements AuctionService {
             try {
                 procesarTransicion(auction, now);
             } catch (Exception e) {
-                // Loguear pero no detener el scheduler por una subasta con error
                 log.error("Error procesando transicion automatica para subasta id={}: {}",
                         auction.getId(), e.getMessage());
             }
@@ -220,19 +217,19 @@ public class AuctionServiceImpl implements AuctionService {
     // METODO INTERNO: logica de transicion para una subasta
     // -------------------------------------------------------
     private void procesarTransicion(Auction auction, OffsetDateTime now) {
-        // Usuario sistema para el historial de transiciones automaticas
-        // Usamos el id 1 que corresponde al ADMIN inicial cargado por Flyway
         User sistemaUser = userRepository.findById(1L)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario sistema", 1L));
-
+                
         if (auction.getStatus() == AuctionStatus.PUBLICADA
                 && (now.isAfter(auction.getStartDate()) || now.isEqual(auction.getStartDate()))) {
 
             AuctionStatus anterior = auction.getStatus();
             auction.cambiarEstado(AuctionStatus.ACTIVA);
             auctionRepository.save(auction);
+            
             registrarHistorial(auction, anterior, AuctionStatus.ACTIVA, sistemaUser,
                     "Inicio automatico por fecha de inicio alcanzada");
+                    
             log.debug("Subasta id={} activada automaticamente", auction.getId());
 
         } else if (auction.getStatus() == AuctionStatus.ACTIVA
@@ -245,14 +242,29 @@ public class AuctionServiceImpl implements AuctionService {
                 auction.cambiarEstado(AuctionStatus.ADJUDICADA);
                 auction.setAdjudicationDate(now);
                 auctionRepository.save(auction);
+                
                 registrarHistorial(auction, anterior, AuctionStatus.ADJUDICADA, sistemaUser,
                         "Cierre automatico con pujas: subasta adjudicada");
+                        
+                // NOTIFICACIONES DE ADJUDICACIÓN
+                notificationService.createNotification(auction.getWinner(), 
+                        "¡Felicidades! Has ganado la subasta del producto '" + auction.getProduct().getName() + "' por un monto de $" + auction.getCurrentPrice() + ".");
+                
+                notificationService.createNotification(auction.getProduct().getSeller(), 
+                        "Tu subasta del producto '" + auction.getProduct().getName() + "' ha finalizado con éxito. El ganador es " + auction.getWinner().getUsername() + ".");
+
                 log.debug("Subasta id={} adjudicada automaticamente", auction.getId());
             } else {
                 auction.cambiarEstado(AuctionStatus.FINALIZADA);
                 auctionRepository.save(auction);
+                
                 registrarHistorial(auction, anterior, AuctionStatus.FINALIZADA, sistemaUser,
                         "Cierre automatico sin pujas: subasta finalizada");
+                        
+                // NOTIFICACIÓN DE FINALIZACIÓN SIN PUJAS
+                notificationService.createNotification(auction.getProduct().getSeller(), 
+                        "Tu subasta del producto '" + auction.getProduct().getName() + "' ha finalizado, pero no recibió ninguna puja.");
+
                 log.debug("Subasta id={} finalizada automaticamente sin pujas", auction.getId());
             }
         }
@@ -271,7 +283,6 @@ public class AuctionServiceImpl implements AuctionService {
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario", id));
     }
 
-    // Registra un cambio de estado en el historial de auditoria
     public void registrarHistorial(Auction auction, AuctionStatus estadoAnterior,
                                     AuctionStatus estadoNuevo, User responsable, String motivo) {
         AuctionStateHistory history = AuctionStateHistory.builder()
@@ -285,25 +296,21 @@ public class AuctionServiceImpl implements AuctionService {
         historyRepository.save(history);
     }
 
-    // Privacidad: mientras esta ACTIVA, el ganador parcial no se muestra a cualquiera
     private String resolveWinnerVisibility(Auction auction, Long requestingUserId) {
         if (auction.getWinner() == null) return null;
-
-        // Si ya termino, el ganador es visible para todos
         if (auction.getStatus() == AuctionStatus.ADJUDICADA
                 || auction.getStatus() == AuctionStatus.FINALIZADA
                 || auction.getStatus() == AuctionStatus.EN_DISPUTA) {
             return auction.getWinner().getUsername();
         }
 
-        // Durante subasta activa: solo el propio ganador o el vendedor ven el nombre
         Long sellerId = auction.getProduct().getSeller().getId();
         Long winnerId = auction.getWinner().getId();
+        
         if (requestingUserId != null
                 && (requestingUserId.equals(sellerId) || requestingUserId.equals(winnerId))) {
             return auction.getWinner().getUsername();
         }
-
         return null;
     }
 
@@ -346,7 +353,7 @@ public class AuctionServiceImpl implements AuctionService {
     private AuctionStateHistoryResponse toHistoryResponse(AuctionStateHistory h) {
         return new AuctionStateHistoryResponse(
                 h.getId(),
-                h.getPreviousState().name(),
+                h.getPreviousState() != null ? h.getPreviousState().name() : null, // Evitar null pointer si Victoria dejó enum nulo en historial
                 h.getNewState().name(),
                 h.getChangeDate(),
                 h.getReason(),
