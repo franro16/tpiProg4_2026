@@ -19,12 +19,15 @@ public class CategoryController {
 
     private final CategoryService categoryService;
 
-    // ------------------------------------
-    // ENDPOINTS PÚBLICOS (Libre acceso)
-    // ------------------------------------
     @GetMapping
     public ResponseEntity<List<CategoryResponse>> getAll() {
         return ResponseEntity.ok(categoryService.getAllCategories());
+    }
+
+    @GetMapping("/debug")
+    public ResponseEntity<Object> debugToken() {
+        var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        return ResponseEntity.ok(auth);
     }
 
     @GetMapping("/{id}")
@@ -32,18 +35,15 @@ public class CategoryController {
         return ResponseEntity.ok(categoryService.getCategoryById(id));
     }
 
-    // ------------------------------------
-    // ENDPOINTS SOLO PARA ADMINISTRADORES
-    // ------------------------------------
     @PostMapping
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public ResponseEntity<CategoryResponse> create(@Valid @RequestBody CategoryRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(categoryService.createCategory(request));
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public ResponseEntity<CategoryResponse> update(
             @PathVariable Long id,
             @Valid @RequestBody CategoryRequest request) {
@@ -51,7 +51,7 @@ public class CategoryController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         categoryService.deleteCategory(id);
         return ResponseEntity.noContent().build();

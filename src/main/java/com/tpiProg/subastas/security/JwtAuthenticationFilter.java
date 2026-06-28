@@ -29,29 +29,44 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         try {
+            log.info("--- INICIANDO FILTRO JWT ---");
             String jwt = extractToken(request);
+            
+            if (jwt == null) {
+                log.warn("El token JWT es nulo. ¿Se envió el header Authorization?");
+            } else {
+                log.info("Token extraído correctamente. Validando...");
+                
+                if (jwtTokenProvider.validateToken(jwt)) {
+                    log.info("Token válido. Extrayendo email...");
+                    String email = jwtTokenProvider.getEmailFromToken(jwt);
+                    log.info("Email extraído: {}", email);
 
-            if (jwt != null && jwtTokenProvider.validateToken(jwt)) {
-                String email = jwtTokenProvider.getEmailFromToken(jwt);
+                    UserDetails userDetails = customUserDetailsService.loadUserByUsername(email);
+                    log.info("Usuario encontrado en BD: {}", userDetails.getUsername());
 
-                // Recargamos desde BD en cada request para detectar bloqueos en tiempo real
-                UserDetails userDetails = customUserDetailsService.loadUserByUsername(email);
-
-                if (userDetails.isAccountNonLocked()) {
-                    UsernamePasswordAuthenticationToken authentication =
-                            new UsernamePasswordAuthenticationToken(
-                                    userDetails,
-                                    null,
-                                    userDetails.getAuthorities()
-                            );
-                    authentication.setDetails(
-                            new WebAuthenticationDetailsSource().buildDetails(request)
-                    );
-                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                    if (userDetails.isAccountNonLocked()) {
+                        log.info("La cuenta NO está bloqueada. Autenticando usuario...");
+                        UsernamePasswordAuthenticationToken authentication =
+                                new UsernamePasswordAuthenticationToken(
+                                        userDetails,
+                                        null,
+                                        userDetails.getAuthorities()
+                                );
+                        authentication.setDetails(
+                                new WebAuthenticationDetailsSource().buildDetails(request)
+                        );
+                        SecurityContextHolder.getContext().setAuthentication(authentication);
+                        log.info("Autenticación exitosa. Roles asignados: {}", userDetails.getAuthorities());
+                    } else {
+                        log.warn("¡ATENCIÓN! La cuenta del usuario está bloqueada en la BD.");
+                    }
+                } else {
+                    log.warn("¡ATENCIÓN! La validación del token falló (validateToken devolvió false).");
                 }
             }
         } catch (Exception ex) {
-            log.error("No se pudo establecer autenticacion: {}", ex.getMessage());
+            log.error("Excepción al intentar autenticar: {}", ex.getMessage());
         }
 
         filterChain.doFilter(request, response);
