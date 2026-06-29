@@ -36,55 +36,50 @@ public class BidServiceImpl implements BidService {
     private final BidRepository bidRepository;
     private final AuctionRepository auctionRepository;
     private final UserRepository userRepository;
-    private final BidMapper bidMapper; // Utiliza el mapper creado por Victoria
+    private final BidMapper bidMapper;
 
     @Override
     @Transactional
-    public BidResponse placeBid(Long auctionId, BidRequest request, String username) {
-        
-        // 1. Obtener usuario (el filtro JWT ya validó que existe, pero necesitamos la entidad)
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new ResourceNotFoundException("Usuario", 0L));
+    public BidResponse placeBid(Long auctionId, BidRequest request, String userEmail) {
 
-        // 2. Validar que el usuario no esté bloqueado
+        // Cargar usuario por email (authentication.getName() devuelve email en UserPrincipal)
+        User user = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado", 0L));
+
         if (user.isBlocked()) {
             throw new UnauthorizedException("El usuario se encuentra bloqueado y no puede participar en subastas.");
         }
 
-        // 3. Obtener subasta aplicando LOCKING PESIMISTA
-        // Esto bloquea la fila en PostgreSQL. Si entra otra petición concurrente, quedará en espera.
+        // Locking pesimista: bloquea la fila en PostgreSQL hasta que termine la transaccion
+        // Si dos usuarios pujan al mismo tiempo, el segundo espera que termine el primero
         Auction auction = auctionRepository.findByIdWithPessimisticLock(auctionId)
                 .orElseThrow(() -> new ResourceNotFoundException("Subasta", auctionId));
 
-        // 4. Validaciones de estado y tiempo
         if (auction.getStatus() != AuctionStatus.ACTIVA) {
             throw new AuctionStateException("No se aceptan pujas. La subasta no está ACTIVA.");
         }
 
+        // Usamos fecha del SERVIDOR en UTC, nunca la del cliente
         if (OffsetDateTime.now(ZoneOffset.UTC).isAfter(auction.getEndDate())) {
             throw new AuctionStateException("El periodo para pujar en esta subasta ha finalizado.");
         }
 
-        // 5. Validar que el vendedor no puje por su propio producto
         if (user.getId().equals(auction.getProduct().getSeller().getId())) {
             throw new BusinessException("El vendedor no puede pujar en su propia subasta.");
         }
 
-        // 6. Validar lógicas de montos exactos con BigDecimal
+        // Validar monto contra la BD, no contra lo que el cliente cree que es el precio actual
         boolean isFirstBid = !bidRepository.existsByAuctionId(auctionId);
         if (isFirstBid) {
-            // Primera puja: Debe ser mayor o igual al precio base
             if (request.amount().compareTo(auction.getBasePrice()) < 0) {
                 throw new BidException("La primera puja debe ser igual o superior al precio base de la subasta.");
             }
         } else {
-            // Pujas subsiguientes: Debe superar el precio actual por al menos el incremento mínimo
             if (request.amount().compareTo(auction.getCurrentPrice().add(auction.getMinimumIncrement())) < 0) {
-                throw new BidException("La puja debe ser igual o superior al precio actual más el incremento mínimo estipulado.");
+                throw new BidException("La puja debe ser igual o superior al precio actual más el incremento mínimo.");
             }
         }
 
-        // 7. Crear la entidad Bid confiando siempre en el OffsetDateTime del Servidor en UTC
         Bid bid = Bid.builder()
                 .auction(auction)
                 .user(user)
@@ -94,25 +89,22 @@ public class BidServiceImpl implements BidService {
 
         bidRepository.save(bid);
 
-        // 8. Actualizar la subasta en la misma transacción
+        // Actualizar precio actual y ganador en la misma transaccion atomica
         auction.setCurrentPrice(request.amount());
         auction.setWinner(user);
         auctionRepository.save(auction);
 
-        log.info("Nueva puja registrada exitosamente: Subasta ID {}, Usuario {}, Monto {}", 
-                 auctionId, username, request.amount());
+        log.info("Puja registrada: Subasta ID={}, Usuario={}, Monto={}", auctionId, userEmail, request.amount());
 
         return bidMapper.toResponse(bid);
     }
 
     @Override
     @Transactional(readOnly = true)
-    public List<BidResponse> getMyBids(Long auctionId, String username) {
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new ResourceNotFoundException("Usuario", 0L));
+    public List<BidResponse> getMyBids(Long auctionId, String userEmail) {
+        User user = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado", 0L));
 
-        // Filtramos en memoria las pujas de este usuario para la subasta indicada
-        // Opcionalmente, podrías crear un método findByAuctionIdAndUserId en BidRepository para optimizar
         return bidRepository.findByAuctionIdOrderByAmountDesc(auctionId)
                 .stream()
                 .filter(bid -> bid.getUser().getId().equals(user.getId()))
@@ -130,16 +122,17 @@ public class BidServiceImpl implements BidService {
                 .map(GrantedAuthority::getAuthority)
                 .anyMatch(role -> role.equals("ROLE_ADMIN"));
 
-        boolean isSeller = auction.getProduct().getSeller().getUsername().equals(authentication.getName());
+        // Comparar por email porque authentication.getName() devuelve email
+        boolean isSeller = auction.getProduct().getSeller().getEmail()
+                .equals(authentication.getName());
 
-        // Regla: Solo ADMIN puede ver todas las pujas libremente.
-        // El SELLER solo puede verlas si la subasta ya finalizó o se adjudicó.
         if (!isAdmin) {
             if (!isSeller) {
-                throw new UnauthorizedException("No tienes permisos para ver el historial completo de pujas.");
+                throw new UnauthorizedException("No tenés permisos para ver el historial completo de pujas.");
             }
-            if (auction.getStatus() != AuctionStatus.FINALIZADA && auction.getStatus() != AuctionStatus.ADJUDICADA) {
-                throw new BusinessException("Como vendedor, solo podrás ver las pujas una vez que la subasta haya finalizado.");
+            if (auction.getStatus() != AuctionStatus.FINALIZADA
+                    && auction.getStatus() != AuctionStatus.ADJUDICADA) {
+                throw new BusinessException("Como vendedor, solo podés ver las pujas una vez que la subasta haya finalizado.");
             }
         }
 
