@@ -35,18 +35,18 @@ public class NotificationServiceImpl implements NotificationService {
                 .creationDate(OffsetDateTime.now(ZoneOffset.UTC))
                 .isRead(false)
                 .build();
-        
+
         notificationRepository.save(notification);
-        log.info("Notificación creada para el usuario {}: {}", user.getUsername(), message);
+        log.info("Notificacion creada para usuario {}: {}", user.getEmail(), message);
     }
 
     @Override
     @Transactional(readOnly = true)
-    public List<NotificationResponse> getMyNotifications(String username) {
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new ResourceNotFoundException("Usuario", 0L));
+    public List<NotificationResponse> getMyNotifications(String userEmail) {
+        // authentication.getName() devuelve email
+        User user = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado", 0L));
 
-        // Usamos el método que Victoria dejó en el repositorio para traerlas ordenadas
         return notificationRepository.findByUserIdOrderByCreationDateDesc(user.getId())
                 .stream()
                 .map(this::toResponse)
@@ -55,19 +55,19 @@ public class NotificationServiceImpl implements NotificationService {
 
     @Override
     @Transactional
-    public void markAsRead(Long notificationId, String username) {
+    public void markAsRead(Long notificationId, String userEmail) {
         Notification notification = notificationRepository.findById(notificationId)
-                .orElseThrow(() -> new ResourceNotFoundException("Notificación", notificationId));
+                .orElseThrow(() -> new ResourceNotFoundException("Notificacion", notificationId));
 
-        if (!notification.getUser().getUsername().equals(username)) {
-            throw new UnauthorizedException("No tienes permisos para modificar esta notificación.");
+        // Comparar por email
+        if (!notification.getUser().getEmail().equals(userEmail)) {
+            throw new UnauthorizedException("No tenés permisos para modificar esta notificacion.");
         }
 
         notification.setRead(true);
         notificationRepository.save(notification);
     }
 
-    // Como Victoria no creó el Mapper, lo resolvemos internamente acá para no sumar archivos extra
     private NotificationResponse toResponse(Notification notification) {
         return new NotificationResponse(
                 notification.getId(),

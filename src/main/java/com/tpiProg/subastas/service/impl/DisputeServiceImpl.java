@@ -39,22 +39,26 @@ public class DisputeServiceImpl implements DisputeService {
 
     @Override
     @Transactional
-    public DisputeResponse openDispute(DisputeRequest request, String username) {
-        User initiator = userRepository.findByUsername(username)
-                .orElseThrow(() -> new ResourceNotFoundException("Usuario", 0L));
+    public DisputeResponse openDispute(DisputeRequest request, String userEmail) {
+        // authentication.getName() devuelve email
+        User initiator = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado", 0L));
 
         Auction auction = auctionRepository.findById(request.auctionId())
                 .orElseThrow(() -> new ResourceNotFoundException("Subasta", request.auctionId()));
 
         if (auction.getStatus() != AuctionStatus.ADJUDICADA) {
-            throw new AuctionStateException("Solo se pueden abrir disputas en subastas en estado ADJUDICADA.");
+            throw new AuctionStateException(
+                    "Solo se pueden abrir disputas en subastas en estado ADJUDICADA.");
         }
 
         boolean isSeller = auction.getProduct().getSeller().getId().equals(initiator.getId());
-        boolean isWinner = auction.getWinner() != null && auction.getWinner().getId().equals(initiator.getId());
+        boolean isWinner = auction.getWinner() != null
+                && auction.getWinner().getId().equals(initiator.getId());
 
         if (!isSeller && !isWinner) {
-            throw new UnauthorizedException("Solo el vendedor o el ganador pueden abrir una disputa para esta subasta.");
+            throw new UnauthorizedException(
+                    "Solo el vendedor o el ganador pueden abrir una disputa.");
         }
 
         Dispute dispute = Dispute.builder()
@@ -67,48 +71,53 @@ public class DisputeServiceImpl implements DisputeService {
 
         disputeRepository.save(dispute);
 
-        AuctionStatus previousStatus = auction.getStatus();
+        AuctionStatus estadoAnterior = auction.getStatus();
         auction.setStatus(AuctionStatus.EN_DISPUTA);
         auctionRepository.save(auction);
 
-        registrarHistorial(auction, initiator, previousStatus, AuctionStatus.EN_DISPUTA, "Disputa iniciada: " + request.reason());
+        registrarHistorial(auction, initiator, estadoAnterior, AuctionStatus.EN_DISPUTA,
+                "Disputa iniciada: " + request.reason());
 
-        log.info("Disputa abierta en subasta {} por el usuario {}", auction.getId(), username);
+        log.info("Disputa abierta en subasta={} por usuario={}", auction.getId(), userEmail);
         return toResponse(dispute);
     }
 
     @Override
     @Transactional
-    public DisputeResponse resolveDispute(Long disputeId, DisputeResolutionRequest request, String adminUsername) {
-        User admin = userRepository.findByUsername(adminUsername)
-                .orElseThrow(() -> new ResourceNotFoundException("Usuario", 0L));
+    public DisputeResponse resolveDispute(Long disputeId, DisputeResolutionRequest request,
+                                          String adminEmail) {
+        User admin = userRepository.findByEmail(adminEmail)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado", 0L));
 
         Dispute dispute = disputeRepository.findById(disputeId)
                 .orElseThrow(() -> new ResourceNotFoundException("Disputa", disputeId));
 
         if (dispute.getAdminResolution() != null) {
-            throw new BusinessException("Esta disputa ya ha sido resuelta previamente.");
+            throw new BusinessException("Esta disputa ya fue resuelta.");
         }
 
-        if (request.newAuctionStatus() != AuctionStatus.ADJUDICADA &&
-            request.newAuctionStatus() != AuctionStatus.FINALIZADA &&
-            request.newAuctionStatus() != AuctionStatus.CANCELADA) {
-            throw new BusinessException("El estado de resolución es inválido. Debe ser ADJUDICADA, FINALIZADA o CANCELADA.");
+        if (request.newAuctionStatus() != AuctionStatus.ADJUDICADA
+                && request.newAuctionStatus() != AuctionStatus.FINALIZADA
+                && request.newAuctionStatus() != AuctionStatus.CANCELADA) {
+            throw new BusinessException(
+                    "Estado de resolucion invalido. Valores permitidos: ADJUDICADA, FINALIZADA, CANCELADA.");
         }
 
         Auction auction = dispute.getAuction();
-        
+
         dispute.setAdminResolver(admin);
         dispute.setAdminResolution(request.adminResolution());
         disputeRepository.save(dispute);
 
-        AuctionStatus previousStatus = auction.getStatus();
+        AuctionStatus estadoAnterior = auction.getStatus();
         auction.setStatus(request.newAuctionStatus());
         auctionRepository.save(auction);
 
-        registrarHistorial(auction, admin, previousStatus, request.newAuctionStatus(), "Resolución de disputa de admin: " + request.adminResolution());
+        registrarHistorial(auction, admin, estadoAnterior, request.newAuctionStatus(),
+                "Resolucion de disputa por admin: " + request.adminResolution());
 
-        log.info("Disputa {} resuelta por admin {}. Nuevo estado de subasta: {}", disputeId, adminUsername, request.newAuctionStatus());
+        log.info("Disputa={} resuelta por admin={}. Nuevo estado subasta={}",
+                disputeId, adminEmail, request.newAuctionStatus());
         return toResponse(dispute);
     }
 
@@ -122,32 +131,34 @@ public class DisputeServiceImpl implements DisputeService {
 
     @Override
     @Transactional(readOnly = true)
-    public List<DisputeResponse> getMyDisputes(String username) {
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new ResourceNotFoundException("Usuario", 0L));
-        
+    public List<DisputeResponse> getMyDisputes(String userEmail) {
+        User user = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado", 0L));
+
         return disputeRepository.findAll().stream()
                 .filter(d -> d.getInitiator().getId().equals(user.getId()))
                 .map(this::toResponse)
                 .collect(Collectors.toList());
     }
 
-    private void registrarHistorial(Auction auction, User user, AuctionStatus previous, AuctionStatus current, String reason) {
+    private void registrarHistorial(Auction auction, User responsable,
+                                    AuctionStatus anterior, AuctionStatus nuevo, String motivo) {
         AuctionStateHistory history = AuctionStateHistory.builder()
                 .auction(auction)
-                .responsibleUser(user)
-                // Aca está la corrección clave: Pasamos el Enum puro, no el .name()
-                .previousState(previous)
-                .newState(current)
+                .responsibleUser(responsable)
+                .previousState(anterior)
+                .newState(nuevo)
                 .changeDate(OffsetDateTime.now(ZoneOffset.UTC))
-                .reason(reason)
+                .reason(motivo)
                 .build();
         historyRepository.save(history);
     }
 
     private DisputeResponse toResponse(Dispute dispute) {
-        String adminResolution = dispute.getAdminResolution() != null ? dispute.getAdminResolution() : "Pendiente de resolución";
-        
+        String resolucion = dispute.getAdminResolution() != null
+                ? dispute.getAdminResolution()
+                : "Pendiente de resolucion";
+
         return new DisputeResponse(
                 dispute.getId(),
                 dispute.getAuction().getId(),
@@ -155,7 +166,7 @@ public class DisputeServiceImpl implements DisputeService {
                 dispute.getReason(),
                 dispute.getDescription(),
                 dispute.getCreationDate(),
-                adminResolution
+                resolucion
         );
     }
 }
