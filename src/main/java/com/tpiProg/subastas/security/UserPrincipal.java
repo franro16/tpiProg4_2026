@@ -6,6 +6,8 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.stream.Collectors;
 
@@ -17,14 +19,17 @@ public class UserPrincipal implements UserDetails {
     private final String email;
     private final String passwordHash;
     private final boolean blocked;
+    private final OffsetDateTime lockedUntil;
     private final Collection<? extends GrantedAuthority> authorities;
 
     private UserPrincipal(Long id, String email, String passwordHash, boolean blocked,
+                          OffsetDateTime lockedUntil,
                           Collection<? extends GrantedAuthority> authorities) {
         this.id = id;
         this.email = email;
         this.passwordHash = passwordHash;
         this.blocked = blocked;
+        this.lockedUntil = lockedUntil;
         this.authorities = authorities;
     }
 
@@ -38,6 +43,7 @@ public class UserPrincipal implements UserDetails {
                 user.getEmail(),
                 user.getPasswordHash(),
                 user.isBlocked(),
+                user.getLockedUntil(),
                 authorities
         );
     }
@@ -52,16 +58,20 @@ public class UserPrincipal implements UserDetails {
         return passwordHash;
     }
 
-    // Spring Security usa getUsername() como identificador; nosotros usamos email
     @Override
     public String getUsername() {
         return email;
     }
 
-    // Si blocked == true, Spring lanza LockedException automaticamente al autenticar
     @Override
     public boolean isAccountNonLocked() {
-        return !blocked;
+        // Bloqueado permanentemente por ADMIN
+        if (blocked) return false;
+        // Bloqueado temporalmente por intentos fallidos
+        if (lockedUntil != null) {
+            return OffsetDateTime.now(ZoneOffset.UTC).isAfter(lockedUntil);
+        }
+        return true;
     }
 
     @Override
