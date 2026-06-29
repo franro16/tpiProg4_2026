@@ -5,6 +5,7 @@ import com.tpiProg.subastas.domain.entity.Product;
 import com.tpiProg.subastas.domain.entity.User;
 import com.tpiProg.subastas.dto.request.ProductRequest;
 import com.tpiProg.subastas.dto.response.ProductResponse;
+import com.tpiProg.subastas.exception.BusinessException;
 import com.tpiProg.subastas.exception.ResourceNotFoundException;
 import com.tpiProg.subastas.exception.UnauthorizedException;
 import com.tpiProg.subastas.mapper.ProductMapper;
@@ -30,16 +31,14 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     @Transactional
-    public ProductResponse createProduct(ProductRequest request, String username) {
-        // traemos el user logueado
-        User seller = userRepository.findByUsername(username)
-                .orElseThrow(() -> new ResourceNotFoundException("Usuario", 0L));
+    public ProductResponse createProduct(ProductRequest request, String userEmail) {
+        // authentication.getName() devuelve email, no username
+        User seller = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado", 0L));
 
-        // buscamos la categoria, si no esta tira el 404 del global handler
         Category category = categoryRepository.findById(request.categoryId())
                 .orElseThrow(() -> new ResourceNotFoundException("Categoria", request.categoryId()));
 
-        // armamos la entidad limpia para la base
         Product product = Product.builder()
                 .name(request.name())
                 .description(request.description())
@@ -48,29 +47,26 @@ public class ProductServiceImpl implements ProductService {
                 .build();
 
         productRepository.save(product);
-
         return productMapper.toResponse(product);
     }
 
     @Override
     @Transactional
-    public ProductResponse updateProduct(Long id, ProductRequest request, String username) {
+    public ProductResponse updateProduct(Long id, ProductRequest request, String userEmail) {
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Producto", id));
 
-        // chequeamos que no venga un vivo a editar lo que no es suyo
-        if (!product.getSeller().getUsername().equals(username)) {
+        // comparar por email porque eso devuelve authentication.getName()
+        if (!product.getSeller().getEmail().equals(userEmail)) {
             throw new UnauthorizedException("No podés editar un producto que no es tuyo");
         }
 
         Category category = categoryRepository.findById(request.categoryId())
                 .orElseThrow(() -> new ResourceNotFoundException("Categoria", request.categoryId()));
 
-        // pisamos los datos viejos
         product.setName(request.name());
         product.setDescription(request.description());
         product.setCategory(category);
-
         productRepository.save(product);
 
         return productMapper.toResponse(product);
@@ -78,17 +74,16 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     @Transactional
-    public void deleteProduct(Long id, String username) {
+    public void deleteProduct(Long id, String userEmail) {
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Producto", id));
 
-        // validamos propiedad de nuevo por las dudas
-        if (!product.getSeller().getUsername().equals(username)) {
+        if (!product.getSeller().getEmail().equals(userEmail)) {
             throw new UnauthorizedException("No podés borrar un producto que no es tuyo");
         }
 
-        // ojo acá: si el producto ya está en una subasta, la base va a chillar por la foreign key.
-        // lo dejamos así para que lo ataje la excepción genérica y no rompa todo el hilo.
+        // Si el producto tiene una subasta activa, la FK de la BD va a rechazar el delete.
+        // Lo captura el GlobalExceptionHandler como error 500 con mensaje claro.
         productRepository.delete(product);
     }
 
@@ -103,7 +98,6 @@ public class ProductServiceImpl implements ProductService {
     @Override
     @Transactional(readOnly = true)
     public List<ProductResponse> getAllProducts() {
-        // devolvemos todo mapeadito a DTO para no filtrar datos de mas
         return productRepository.findAll().stream()
                 .map(productMapper::toResponse)
                 .collect(Collectors.toList());
