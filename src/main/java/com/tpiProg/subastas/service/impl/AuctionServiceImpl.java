@@ -57,6 +57,7 @@ public class AuctionServiceImpl implements AuctionService {
         }
 
         User seller = findUserOrThrow(sellerId);
+
         Product product = productRepository.findById(request.productId())
                 .orElseThrow(() -> new ResourceNotFoundException("Producto", request.productId()));
 
@@ -69,8 +70,9 @@ public class AuctionServiceImpl implements AuctionService {
                 .basePrice(request.basePrice())
                 .minimumIncrement(request.minimumIncrement())
                 .currentPrice(request.basePrice())
-                .startDate(request.startDate().withOffsetSameInstant(ZoneOffset.UTC))
-                .endDate(request.endDate().withOffsetSameInstant(ZoneOffset.UTC))
+                // ACA ESTA LA CORRECCION: Le agregamos -03:00 y luego pasamos a UTC
+                .startDate(request.startDate().atOffset(ZoneOffset.of("-03:00")).withOffsetSameInstant(ZoneOffset.UTC))
+                .endDate(request.endDate().atOffset(ZoneOffset.of("-03:00")).withOffsetSameInstant(ZoneOffset.UTC))
                 .status(AuctionStatus.BORRADOR)
                 .description(request.description())
                 .build();
@@ -223,6 +225,7 @@ public class AuctionServiceImpl implements AuctionService {
             auctionRepository.save(auction);
             registrarHistorial(auction, anterior, AuctionStatus.ACTIVA, sistemaUser,
                     "Inicio automatico por fecha de inicio alcanzada");
+
             log.debug("Subasta id={} activada automaticamente", auction.getId());
 
         } else if (auction.getStatus() == AuctionStatus.ACTIVA
@@ -300,6 +303,7 @@ public class AuctionServiceImpl implements AuctionService {
                 .reason(motivo)
                 .responsibleUser(responsable)
                 .build();
+
         historyRepository.save(history);
     }
 
@@ -314,6 +318,7 @@ public class AuctionServiceImpl implements AuctionService {
 
         Long sellerId = auction.getProduct().getSeller().getId();
         Long winnerId = auction.getWinner().getId();
+
         if (requestingUserId != null
                 && (requestingUserId.equals(sellerId) || requestingUserId.equals(winnerId))) {
             return auction.getWinner().getUsername();

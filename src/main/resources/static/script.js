@@ -30,7 +30,43 @@ function guardarSesion(datosSesion) {
 function cerrarSesion() {
   session = null;
   localStorage.removeItem("subastas_session");
+
+  subastasCache = [];
+  productosCache = [];
+  categoriasCache = [];
+
+  limpiarPanelesPrivados();
+
   renderizarSesion();
+  cargarDatosPublicos();
+}
+
+function limpiarPanelesPrivados() {
+  var detalle = $("#auctionDetail");
+  if (detalle) {
+    detalle.classList.add("hidden");
+    detalle.innerHTML = "";
+  }
+
+  var notificaciones = $("#notificationList");
+  if (notificaciones) {
+    notificaciones.innerHTML = "";
+  }
+
+  var reclamos = $("#myDisputeList");
+  if (reclamos) {
+    reclamos.innerHTML = "";
+  }
+
+  var adminUsuarios = $("#adminUserList");
+  if (adminUsuarios) {
+    adminUsuarios.innerHTML = "";
+  }
+
+  var adminReclamos = $("#adminDisputeList");
+  if (adminReclamos) {
+    adminReclamos.innerHTML = "";
+  }
 }
 
 function normalizarRol(rol) {
@@ -84,20 +120,20 @@ function obtenerMensajeError(error) {
     return "Ocurrió un error";
   }
 
-  if (error.message) {
-    return error.message;
-  }
-
-  if (error.error) {
-    return error.error;
-  }
-
   if (error.fieldErrors) {
     return Object.keys(error.fieldErrors)
       .map(function (campo) {
         return campo + ": " + error.fieldErrors[campo];
       })
       .join(" | ");
+  }
+
+  if (error.message) {
+    return error.message;
+  }
+
+  if (error.error) {
+    return error.error;
   }
 
   if (typeof error === "string") {
@@ -178,11 +214,79 @@ function formatearFecha(valor) {
 }
 
 function fechaLocalAIso(valor) {
-  if (!valor) {
-    return null;
+  if (!valor) return null;
+
+  return valor.toString().substring(0, 16);
+}
+
+function formatearFechaParaInput(fecha) {
+  var anio = fecha.getFullYear();
+  var mes = String(fecha.getMonth() + 1).padStart(2, "0");
+  var dia = String(fecha.getDate()).padStart(2, "0");
+  var hora = String(fecha.getHours()).padStart(2, "0");
+  var minutos = String(fecha.getMinutes()).padStart(2, "0");
+
+  return anio + "-" + mes + "-" + dia + "T" + hora + ":" + minutos;
+}
+
+function obtenerFechaFuturaParaInput(minutosExtra) {
+  var fecha = new Date();
+  fecha.setMinutes(fecha.getMinutes() + minutosExtra);
+  fecha.setSeconds(0);
+  fecha.setMilliseconds(0);
+
+  return formatearFechaParaInput(fecha);
+}
+
+function configurarFechasSubasta() {
+  var auctionForm = $("#auctionForm");
+
+  if (!auctionForm) {
+    return;
   }
 
-  return new Date(valor).toISOString();
+  var inputInicio = auctionForm.querySelector("[name='startDate']");
+  var inputCierre = auctionForm.querySelector("[name='endDate']");
+
+  if (!inputInicio || !inputCierre) {
+    return;
+  }
+
+  var inicioMinimo = obtenerFechaFuturaParaInput(2);
+  var cierreMinimo = obtenerFechaFuturaParaInput(3);
+
+  inputInicio.min = inicioMinimo;
+  inputCierre.min = cierreMinimo;
+
+  if (!inputInicio.value) {
+    inputInicio.value = inicioMinimo;
+  }
+
+  if (!inputCierre.value) {
+    inputCierre.value = obtenerFechaFuturaParaInput(10);
+  }
+
+  inputInicio.addEventListener("change", function () {
+    if (!inputInicio.value) {
+      return;
+    }
+
+    var inicio = new Date(inputInicio.value);
+    var cierreActual = new Date(inputCierre.value);
+
+    if (isNaN(inicio.getTime())) {
+      return;
+    }
+
+    var cierreMinimoSegunInicio = new Date(inicio.getTime() + 60000);
+    var cierreMinimoFormateado = formatearFechaParaInput(cierreMinimoSegunInicio);
+
+    inputCierre.min = cierreMinimoFormateado;
+
+    if (!inputCierre.value || isNaN(cierreActual.getTime()) || cierreActual <= inicio) {
+      inputCierre.value = cierreMinimoFormateado;
+    }
+  });
 }
 
 function cambiarSeccion(idSeccion) {
@@ -330,7 +434,6 @@ function renderizarSubastas(subastas) {
 
   subastas.forEach(function (subasta) {
     var estado = String(subasta.status || "");
-    var puedePujar = tieneRol("USER") && estado === "ACTIVA";
     var puedePublicar = tieneRol("SELLER") && estado === "BORRADOR";
     var puedeCancelar = estaLogueado() && (tieneRol("SELLER") || tieneRol("ADMIN")) && estado !== "FINALIZADA" && estado !== "ADJUDICADA" && estado !== "CANCELADA";
 
@@ -345,11 +448,14 @@ function renderizarSubastas(subastas) {
     html += "<p class='meta'>Cierre: " + formatearFecha(subasta.endDate) + "</p>";
     html += "<p>" + escaparHTML(subasta.description || "Sin descripción") + "</p>";
     html += "<div class='card-actions'>";
+
     html += "<button class='btn secondary small' data-action='detail' data-id='" + subasta.id + "'>Ver detalle</button>";
 
-    if (puedePujar) {
+    if (tieneRol("USER") && estado === "ACTIVA") {
       html += "<button class='btn primary small' data-action='bid' data-id='" + subasta.id + "'>Pujar</button>";
-    }
+    } else if (tieneRol("USER") && estado !== "ACTIVA") {
+      html += "<button class='btn secondary small' disabled>Puja no disponible</button>";
+}
 
     if (puedePublicar) {
       html += "<button class='btn primary small' data-action='publish' data-id='" + subasta.id + "'>Publicar</button>";
@@ -492,19 +598,59 @@ function cancelarSubasta(id) {
 }
 
 function pujarSubasta(id) {
-  var monto = prompt("Ingresá el monto de la puja:");
+  if (!estaLogueado()) {
+    mostrarMensaje("Para pujar primero tenés que iniciar sesión.", "error");
+    cambiarSeccion("sectionAuth");
+    return;
+  }
 
-  if (!monto) {
+  if (!tieneRol("USER")) {
+    mostrarMensaje("Para pujar tenés que estar logueado con un usuario USER. El vendedor no puede pujar en su propia subasta.", "error");
+    return;
+  }
+
+  var subasta = subastasCache.find(function (item) {
+    return Number(item.id) === Number(id);
+  });
+
+  if (!subasta) {
+    mostrarMensaje("No se encontró la subasta. Actualizá el listado e intentá de nuevo.", "error");
+    return;
+  }
+
+  if (String(subasta.status || "") !== "ACTIVA") {
+    mostrarMensaje("Solo se puede pujar cuando la subasta está ACTIVA. Si está PUBLICADA, esperá a que llegue la fecha de inicio y tocá Actualizar.", "error");
+    return;
+  }
+
+  var textoMonto = prompt(
+    "Ingresá el monto de la puja:\n" +
+    "Precio actual: " + formatearPrecio(subasta.currentPrice) + "\n" +
+    "Incremento mínimo: " + formatearPrecio(subasta.minimumIncrement)
+  );
+
+  if (!textoMonto) {
+    return;
+  }
+
+  var monto = Number(String(textoMonto).replace(",", "."));
+
+  if (isNaN(monto) || monto <= 0) {
+    mostrarMensaje("El monto de la puja debe ser un número mayor a cero.", "error");
     return;
   }
 
   api("/api/auctions/" + id + "/bids", {
     method: "POST",
-    body: JSON.stringify({ auctionId: Number(id), amount: Number(monto) })
+    body: JSON.stringify({
+      auctionId: Number(id),
+      amount: monto
+    })
   })
     .then(function () {
       mostrarMensaje("Puja realizada correctamente");
       cargarSubastas();
+      cargarMisPujas(id);
     })
     .catch(function (error) {
       mostrarMensaje("No se pudo pujar: " + obtenerMensajeError(error), "error");
@@ -763,8 +909,24 @@ function configurarEventos() {
 
   var botonActualizar = $("#refreshBtn");
   if (botonActualizar) {
-    botonActualizar.addEventListener("click", cargarDatosPublicos);
-  }
+    botonActualizar.addEventListener("click", function () {
+      botonActualizar.disabled = true;
+      botonActualizar.textContent = "Actualizando...";
+
+      Promise.all([
+        cargarSubastas(),
+        cargarProductos(),
+        cargarCategorias()
+    ])
+      .then(function () {
+        mostrarMensaje("Datos actualizados correctamente");
+      })
+      .finally(function () {
+        botonActualizar.disabled = false;
+        botonActualizar.textContent = "Actualizar";
+      });
+  });
+}
 
   var loginForm = $("#loginForm");
   if (loginForm) {
@@ -780,6 +942,12 @@ function configurarEventos() {
         })
       })
         .then(function (respuesta) {
+          subastasCache = [];
+          productosCache = [];
+          categoriasCache = [];
+
+          limpiarPanelesPrivados();
+
           guardarSesion(respuesta);
           mostrarMensaje("Inicio de sesión correcto");
           loginForm.reset();
@@ -808,6 +976,12 @@ function configurarEventos() {
         })
       })
         .then(function (respuesta) {
+          subastasCache = [];
+          productosCache = [];
+          categoriasCache = [];
+
+          limpiarPanelesPrivados();
+
           guardarSesion(respuesta);
           mostrarMensaje("Usuario registrado correctamente");
           registerForm.reset();
@@ -872,24 +1046,76 @@ function configurarEventos() {
 
   var auctionForm = $("#auctionForm");
   if (auctionForm) {
+    configurarFechasSubasta();
+
     auctionForm.addEventListener("submit", function (event) {
       event.preventDefault();
+
       var datos = new FormData(auctionForm);
+
+      var productId = Number(datos.get("productId"));
+      var basePrice = Number(datos.get("basePrice"));
+      var minimumIncrement = Number(datos.get("minimumIncrement"));
+
+      var startDate = datos.get("startDate");
+      var endDate = datos.get("endDate");
+
+      var inicio = new Date(startDate);
+      var cierre = new Date(endDate);
+
+      var ahora = new Date();
+      var inicioMinimo = new Date(ahora.getTime() + 60000);
+
+      if (!productId) {
+        mostrarMensaje("Debés seleccionar un producto.", "error");
+        return;
+      }
+
+      if (isNaN(basePrice) || basePrice < 0) {
+        mostrarMensaje("El precio base debe ser cero o mayor.", "error");
+        return;
+      }
+
+      if (isNaN(minimumIncrement) || minimumIncrement <= 0) {
+        mostrarMensaje("El incremento mínimo debe ser mayor a cero.", "error");
+        return;
+      }
+
+      if (!startDate || !endDate) {
+        mostrarMensaje("Debés completar la fecha de inicio y la fecha de cierre.", "error");
+        return;
+      }
+
+      if (isNaN(inicio.getTime()) || isNaN(cierre.getTime())) {
+        mostrarMensaje("Las fechas ingresadas no son válidas.", "error");
+        return;
+      }
+
+      if (inicio < inicioMinimo) {
+        mostrarMensaje("La fecha de inicio debe ser al menos 1 minuto posterior a la hora actual.", "error");
+        return;
+      }
+
+      if (cierre <= inicio) {
+        mostrarMensaje("La fecha de cierre debe ser posterior a la fecha de inicio.", "error");
+        return;
+      }
 
       api("/api/auctions", {
         method: "POST",
         body: JSON.stringify({
-          productId: Number(datos.get("productId")),
-          basePrice: Number(datos.get("basePrice")),
-          minimumIncrement: Number(datos.get("minimumIncrement")),
-          startDate: fechaLocalAIso(datos.get("startDate")),
-          endDate: fechaLocalAIso(datos.get("endDate")),
+          productId: productId,
+          basePrice: basePrice,
+          minimumIncrement: minimumIncrement,
+          startDate: fechaLocalAIso(startDate),
+          endDate: fechaLocalAIso(endDate),
           description: datos.get("description")
         })
       })
         .then(function () {
           mostrarMensaje("Subasta creada correctamente. Ahora podés publicarla desde el listado.");
           auctionForm.reset();
+          configurarFechasSubasta();
           cargarSubastas();
           cambiarSeccion("sectionAuctions");
         })

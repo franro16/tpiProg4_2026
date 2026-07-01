@@ -326,3 +326,8 @@ textarea {
   background-color: #fff6df;
   color: #b66a00;
 }
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
