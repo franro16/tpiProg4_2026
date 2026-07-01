@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sistema de Subastas Online</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+
+<header class="header">
+  <div>
+    <p class="tag">TPI Programación IV</p>
+    <h1>Sistema de Subastas Online</h1>
+    <p class="subtitle">Frontend conectado al backend de Spring Boot</p>
+  </div>
+
+  <div class="session">
+    <span id="sessionInfo">Sin sesión iniciada</span>
+    <button id="logoutBtn" class="btn secondary hidden">Cerrar sesión</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <aside class="sidebar">
+    <button class="nav-btn active" data-section="sectionAuctions">Subastas</button>
+    <button class="nav-btn" data-section="sectionProducts">Productos</button>
+    <button class="nav-btn" data-section="sectionCategories">Categorías</button>
+    <button class="nav-btn" data-section="sectionAuth">Login / Registro</button>
+
+    <button class="nav-btn only-seller hidden" data-section="sectionSeller">Panel vendedor</button>
+    <button class="nav-btn only-auth hidden" data-section="sectionNotifications">Notificaciones</button>
+    <button class="nav-btn only-auth hidden" data-section="sectionDisputes">Reclamos</button>
+    <button class="nav-btn only-admin hidden" data-section="sectionAdmin">Panel admin</button>
+
+    <div class="help-card">
+      <h3>Roles</h3>
+      <p><strong>USER:</strong> puede pujar.</p>
+      <p><strong>SELLER:</strong> puede crear productos y subastas.</p>
+      <p><strong>ADMIN:</strong> puede gestionar categorías, usuarios y reclamos.</p>
+    </div>
+  </aside>
+
+  <section class="content">
+
+    <div id="messageArea"></div>
+
+    <!-- SUBASTAS -->
+    <section id="sectionAuctions" class="section active">
+      <div class="section-title">
+        <div>
+          <p class="tag">Listado público</p>
+          <h2>Subastas</h2>
+        </div>
+        <button id="refreshBtn" class="btn secondary">Actualizar</button>
+      </div>
+
+      <div id="auctionList" class="grid"></div>
+      <div id="auctionDetail" class="detail hidden"></div>
+    </section>
+
+    <!-- PRODUCTOS -->
+    <section id="sectionProducts" class="section">
+      <div class="section-title">
+        <div>
+          <p class="tag">Listado público</p>
+          <h2>Productos</h2>
+        </div>
+      </div>
+
+      <div id="productList" class="grid"></div>
+    </section>
+
+    <!-- CATEGORÍAS -->
+    <section id="sectionCategories" class="section">
+      <div class="section-title">
+        <div>
+          <p class="tag">Listado público</p>
+          <h2>Categorías</h2>
+        </div>
+      </div>
+
+      <div id="categoryList" class="grid small-grid"></div>
+
+      <form id="categoryForm" class="form-card only-admin hidden">
+        <h3>Crear categoría</h3>
+
+        <label>
+          Nombre
+          <input type="text" name="name" required placeholder="Ej: Tecnología">
+        </label>
+
+        <label>
+          Descripción
+          <textarea name="description" rows="3" placeholder="Descripción de la categoría"></textarea>
+        </label>
+
+        <button class="btn primary" type="submit">Guardar categoría</button>
+      </form>
+    </section>
+
+    <!-- LOGIN / REGISTRO -->
+    <section id="sectionAuth" class="section">
+      <div class="forms-grid">
+
+        <form id="loginForm" class="form-card">
+          <h2>Iniciar sesión</h2>
+
+          <label>
+            Usuario o email
+            <input type="text" name="identifier" required placeholder="usuario o email">
+          </label>
+
+          <label>
+            Contraseña
+            <input type="password" name="password" required placeholder="contraseña">
+          </label>
+
+          <button class="btn primary" type="submit">Ingresar</button>
+        </form>
+
+        <form id="registerForm" class="form-card">
+          <h2>Registrarse</h2>
+
+          <label>
+            Usuario
+            <input type="text" name="username" required placeholder="nombre de usuario">
+          </label>
+
+          <label>
+            Email
+            <input type="email" name="email" required placeholder="correo@ejemplo.com">
+          </label>
+
+          <label>
+            Contraseña
+            <input type="password" name="password" required minlength="6" placeholder="mínimo 6 caracteres">
+          </label>
+
+          <label>
+            Rol
+            <select name="role" required>
+              <option value="USER">USER - Comprador / pujador</option>
+              <option value="SELLER">SELLER - Vendedor</option>
+            </select>
+          </label>
+
+          <button class="btn primary" type="submit">Crear cuenta</button>
+        </form>
+
+      </div>
+    </section>
+
+    <!-- PANEL VENDEDOR -->
+    <section id="sectionSeller" class="section">
+      <div class="section-title">
+        <div>
+          <p class="tag">Acciones con rol SELLER</p>
+          <h2>Panel vendedor</h2>
+        </div>
+      </div>
+
+      <div class="forms-grid">
+
+        <form id="productForm" class="form-card">
+          <h3>Crear producto</h3>
+
+          <label>
+            Nombre
+            <input type="text" name="name" required placeholder="Nombre del producto">
+          </label>
+
+          <label>
+            Descripción
+            <textarea name="description" rows="4" placeholder="Descripción del producto"></textarea>
+          </label>
+
+          <label>
+            Categoría
+            <select name="categoryId" id="productCategorySelect" required></select>
+          </label>
+
+          <button class="btn primary" type="submit">Crear producto</button>
+        </form>
+
+        <form id="auctionForm" class="form-card">
+          <h3>Crear subasta</h3>
+
+          <label>
+            Producto
+            <select name="productId" id="auctionProductSelect" required></select>
+          </label>
+
+          <label>
+            Precio base
+            <input type="number" name="basePrice" min="0" step="0.01" required placeholder="1000">
+          </label>
+
+          <label>
+            Incremento mínimo
+            <input type="number" name="minimumIncrement" min="0.01" step="0.01" required placeholder="100">
+          </label>
+
+          <label>
+            Fecha de inicio
+            <input type="datetime-local" name="startDate" required>
+          </label>
+
+          <label>
+            Fecha de cierre
+            <input type="datetime-local" name="endDate" required>
+          </label>
+
+          <label>
+            Descripción
+            <textarea name="description" rows="4" placeholder="Descripción de la subasta"></textarea>
+          </label>
+
+          <button class="btn primary" type="submit">Crear subasta</button>
+          <p class="note">Después de crearla, podés publicarla desde el listado de subastas.</p>
+        </form>
+
+      </div>
+    </section>
+
+    <!-- NOTIFICACIONES -->
+    <section id="sectionNotifications" class="section">
+      <div class="section-title">
+        <div>
+          <p class="tag">Usuario autenticado</p>
+          <h2>Mis notificaciones</h2>
+        </div>
+
+        <button id="loadNotificationsBtn" class="btn secondary">Cargar notificaciones</button>
+      </div>
+
+      <div id="notificationList" class="list"></div>
+    </section>
+
+    <!-- RECLAMOS -->
+    <section id="sectionDisputes" class="section">
+      <div class="section-title">
+        <div>
+          <p class="tag">Usuario autenticado</p>
+          <h2>Reclamos</h2>
+        </div>
+
+        <button id="loadMyDisputesBtn" class="btn secondary">Cargar mis reclamos</button>
+      </div>
+
+      <form id="disputeForm" class="form-card compact">
+        <h3>Abrir reclamo</h3>
+
+        <label>
+          ID de subasta
+          <input type="number" name="auctionId" required placeholder="Ej: 1">
+        </label>
+
+        <label>
+          Motivo
+          <input type="text" name="reason" required placeholder="Motivo del reclamo">
+        </label>
+
+        <label>
+          Descripción
+          <textarea name="description" rows="4" required placeholder="Explicá el problema"></textarea>
+        </label>
+
+        <button class="btn primary" type="submit">Abrir reclamo</button>
+      </form>
+
+      <div id="myDisputeList" class="list"></div>
+    </section>
+
+    <!-- ADMIN -->
+    <section id="sectionAdmin" class="section">
+      <div class="section-title">
+        <div>
+          <p class="tag">Acciones con rol ADMIN</p>
+          <h2>Panel administrador</h2>
+        </div>
+
+        <button id="loadAdminBtn" class="btn secondary">Cargar datos admin</button>
+      </div>
+
+      <div class="admin-box">
+        <h3>Usuarios</h3>
+        <div id="adminUserList" class="list"></div>
+      </div>
+
+      <div class="admin-box">
+        <h3>Reclamos abiertos</h3>
+        <div id="adminDisputeList" class="list"></div>
+      </div>
+
+      <form id="resolveDisputeForm" class="form-card compact">
+        <h3>Resolver reclamo</h3>
+
+        <label>
+          ID del reclamo
+          <input type="number" name="disputeId" required>
+        </label>
+
+        <label>
+          Resolución
+          <textarea name="adminResolution" rows="4" required placeholder="Detalle de la resolución"></textarea>
+        </label>
+
+        <label>
+          Nuevo estado de la subasta
+          <select name="newAuctionStatus" required>
+            <option value="ADJUDICADA">ADJUDICADA</option>
+            <option value="FINALIZADA">FINALIZADA</option>
+            <option value="CANCELADA">CANCELADA</option>
+          </select>
+        </label>
+
+        <button class="btn primary" type="submit">Resolver reclamo</button>
+      </form>
+    </section>
+
+  </section>
+
+</main>
+
+<script src="./script.js"></script>
+</body>
+</html>

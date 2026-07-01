@@ -34,6 +34,14 @@ public class SecurityConfig {
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // Frontend estatico - libre acceso
+                    .requestMatchers(
+                            "/",
+                            "/index.html",
+                            "/styles.css",
+                            "/script.js",
+                            "/favicon.ico"
+                    ).permitAll()
                         // Swagger UI - libre acceso para la demo
                         .requestMatchers(
                                 "/swagger-ui/**",
